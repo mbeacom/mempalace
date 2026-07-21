@@ -403,13 +403,23 @@ def scan_convos(convo_dir: str) -> list:
     caller can tell why an apparent conversation directory yielded no files.
     """
     convo_path = Path(convo_dir).expanduser().resolve()
+    copilot_storage_root = (
+        convo_path.name in {".copilot", "copilot"} and (convo_path / "session-state").is_dir()
+    )
     files = []
     for root, dirs, filenames in os.walk(convo_path):
         dirs[:] = [d for d in dirs if d not in CONVO_SKIP_DIRS]
+        root_path = Path(root)
+        copilot_session_dir = root_path.parent.name == "session-state"
         for filename in filenames:
+            filepath = root_path / filename
+            if copilot_session_dir:
+                if filename != "events.jsonl":
+                    continue
+            elif copilot_storage_root:
+                continue
             if filename.endswith(".meta.json"):
                 continue
-            filepath = Path(root) / filename
             if filepath.suffix.lower() in CONVO_EXTENSIONS:
                 # Skip symlinks and oversized files
                 if filepath.is_symlink():
@@ -511,7 +521,7 @@ def _file_chunks_locked(
             return 0, room_counts_delta, True
 
         # Purge stale drawers first. Fires both on a normalize-schema bump
-        # (file_already_mined() returned False for pre-v2 drawers) and on a
+        # (file_already_mined() returned False for stale drawers) and on a
         # changed/grown transcript (mtime differs) — clean them out so the
         # source doesn't end up with mixed old/new drawers.
         try:
@@ -575,6 +585,11 @@ def _file_chunks_locked(
     return drawers_added, room_counts_delta, False
 
 
+def _is_copilot_session_path(path: Path) -> bool:
+    """Return True when ``path`` is within Copilot CLI's session-state tree."""
+    return "session-state" in path.parts
+
+
 def _is_ai_tool_path(path: Path) -> bool:
     """Return True when `path` lives inside a known AI-tool storage dir.
 
@@ -582,6 +597,8 @@ def _is_ai_tool_path(path: Path) -> bool:
     or `.codex-archive` do NOT match):
       - any segment ``.codex`` (Codex CLI sessions / archives)
       - any segment ``.gemini`` (Gemini CLI sessions under ~/.gemini/tmp/...)
+      - a ``session-state`` segment (GitHub Copilot CLI sessions, including
+        session directories mounted without their parent ``.copilot`` folder)
       - the consecutive segment pair ``.claude/projects`` (Claude Code).
         ``.claude`` alone is NOT matched — that is the settings/config dir,
         not a conversation source.
@@ -597,6 +614,8 @@ def _is_ai_tool_path(path: Path) -> bool:
     if ".codex" in parts:
         return True
     if ".gemini" in parts:
+        return True
+    if _is_copilot_session_path(path):
         return True
     for i in range(len(parts) - 1):
         if parts[i] == ".claude" and parts[i + 1] == "projects":
@@ -634,8 +653,8 @@ def _resolve_wing(convo_path: Path, wing: Optional[str]) -> str:
       1. Explicit ``wing`` argument from the user — always wins, even on
          an AI-tool path. Empty string is treated as "no wing".
       2. AI-tool path detection — defaults to ``wing_api`` so Claude
-         Code / Codex / Gemini conversations group under a single wing
-         dedicated to API-sourced content.
+         Code / Copilot / Codex / Gemini conversations group under a
+         single wing dedicated to API-sourced content.
       3. Basename fallback — sanitized via ``config.normalize_wing_name``
          (lowercase, spaces/hyphens collapsed to underscores). Shared
          single source of truth with ``cmd_init``,
@@ -862,7 +881,7 @@ def _mine_convos_impl(
             room_counts[room] += 1
 
         # Lock + purge stale + file fresh chunks. Lock serializes concurrent
-        # agents; purge removes pre-v2 drawers so the schema bump applies.
+        # agents; purge removes stale drawers so the schema bump applies.
         drawers_added, room_delta, skipped = _file_chunks_locked(
             collection,
             source_file,
