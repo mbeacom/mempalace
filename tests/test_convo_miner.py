@@ -446,6 +446,12 @@ def test_resolve_wing_mounted_copilot_auto_routes_to_wing_api(tmp_path):
     assert _resolve_wing(target, wing=None) == "wing_api"
 
 
+def test_resolve_wing_unrelated_session_state_uses_basename(tmp_path):
+    target = tmp_path / "archive" / "session-state"
+    target.mkdir(parents=True)
+    assert _resolve_wing(target, wing=None) == "session_state"
+
+
 def test_resolve_wing_unrelated_dir_uses_basename_fallback(tmp_path):
     """Existing behavior preserved: arbitrary directories use the
     sanitized basename as the wing."""

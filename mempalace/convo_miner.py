@@ -403,21 +403,25 @@ def scan_convos(convo_dir: str) -> list:
     caller can tell why an apparent conversation directory yielded no files.
     """
     convo_path = Path(convo_dir).expanduser().resolve()
-    copilot_storage_root = (
-        convo_path.name in {".copilot", "copilot"} and (convo_path / "session-state").is_dir()
-    )
+    copilot_session_root = _find_copilot_session_root(convo_path)
     files = []
     for root, dirs, filenames in os.walk(convo_path):
         dirs[:] = [d for d in dirs if d not in CONVO_SKIP_DIRS]
         root_path = Path(root)
-        copilot_session_dir = root_path.parent.name == "session-state"
+        if copilot_session_root is not None:
+            if root_path == copilot_session_root.parent:
+                dirs[:] = [d for d in dirs if root_path / d == copilot_session_root]
+                filenames = []
+            elif root_path == copilot_session_root:
+                filenames = []
+            elif root_path.parent == copilot_session_root:
+                dirs[:] = []
+                filenames = [name for name in filenames if name == "events.jsonl"]
+            elif copilot_session_root in root_path.parents:
+                dirs[:] = []
+                filenames = []
         for filename in filenames:
             filepath = root_path / filename
-            if copilot_session_dir:
-                if filename != "events.jsonl":
-                    continue
-            elif copilot_storage_root:
-                continue
             if filename.endswith(".meta.json"):
                 continue
             if filepath.suffix.lower() in CONVO_EXTENSIONS:
@@ -585,9 +589,30 @@ def _file_chunks_locked(
     return drawers_added, room_counts_delta, False
 
 
-def _is_copilot_session_path(path: Path) -> bool:
-    """Return True when ``path`` is within Copilot CLI's session-state tree."""
-    return "session-state" in path.parts
+def _looks_like_copilot_session_root(path: Path) -> bool:
+    """Return True when ``path`` is a canonical Copilot ``session-state`` root."""
+    if path.name != "session-state" or not path.is_dir():
+        return False
+    if path.parent.name in {".copilot", "copilot"}:
+        return True
+    try:
+        return any(
+            child.is_dir() and (child / "events.jsonl").is_file() for child in path.iterdir()
+        )
+    except OSError:
+        return False
+
+
+def _find_copilot_session_root(path: Path) -> Optional[Path]:
+    """Find the Copilot ``session-state`` root containing or below ``path``."""
+    if path.name in {".copilot", "copilot"}:
+        candidate = path / "session-state"
+        if _looks_like_copilot_session_root(candidate):
+            return candidate
+    for candidate in (path, *path.parents):
+        if _looks_like_copilot_session_root(candidate):
+            return candidate
+    return None
 
 
 def _is_ai_tool_path(path: Path) -> bool:
@@ -597,8 +622,8 @@ def _is_ai_tool_path(path: Path) -> bool:
     or `.codex-archive` do NOT match):
       - any segment ``.codex`` (Codex CLI sessions / archives)
       - any segment ``.gemini`` (Gemini CLI sessions under ~/.gemini/tmp/...)
-      - a ``session-state`` segment (GitHub Copilot CLI sessions, including
-        session directories mounted without their parent ``.copilot`` folder)
+      - a recognized GitHub Copilot CLI ``session-state`` tree, including
+        trees mounted beneath a directory named ``copilot``
       - the consecutive segment pair ``.claude/projects`` (Claude Code).
         ``.claude`` alone is NOT matched — that is the settings/config dir,
         not a conversation source.
@@ -615,7 +640,7 @@ def _is_ai_tool_path(path: Path) -> bool:
         return True
     if ".gemini" in parts:
         return True
-    if _is_copilot_session_path(path):
+    if _find_copilot_session_root(path) is not None:
         return True
     for i in range(len(parts) - 1):
         if parts[i] == ".claude" and parts[i + 1] == "projects":

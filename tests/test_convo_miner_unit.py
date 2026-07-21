@@ -431,7 +431,22 @@ class TestScanConvos:
 
         files = scan_convos(str(root))
 
-        assert [f.name for f in files] == ["chat.md"]
+        assert {f.name for f in files} == {"chat.md", "plan.md"}
+
+    def test_scan_single_copilot_session_keeps_only_event_log(self, tmp_path):
+        session = tmp_path / ".copilot" / "session-state" / "session-id"
+        nested = session / "files"
+        nested.mkdir(parents=True)
+        (session / "events.jsonl").write_text(
+            '{"type":"session.start","data":{"sessionId":"session-id"}}\n',
+            encoding="utf-8",
+        )
+        (session / "plan.md").write_text("generated plan", encoding="utf-8")
+        (nested / "index.md").write_text("generated index", encoding="utf-8")
+
+        files = scan_convos(str(session))
+
+        assert [f.name for f in files] == ["events.jsonl"]
 
     @pytest.mark.skipif(
         sys.platform == "win32",
