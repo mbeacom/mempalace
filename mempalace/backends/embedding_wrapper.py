@@ -8,14 +8,21 @@ from .base import BaseCollection
 
 
 def _embed_texts(texts: list[str]) -> list[list[float]]:
-    """Embed ``texts`` with the configured local embedding function."""
+    """Embed ``texts`` with the configured local embedding function.
+
+    Rows are converted with ``.tolist()`` rather than ``list(...)``. Iterating a
+    NumPy row yields ``np.float32`` *scalars*, and under NumPy 2.x those are no
+    longer ``float`` subclasses, so ChromaDB's ``normalize_embeddings`` type
+    gate (``isinstance(row[0], (int, float))``) rejects the batch outright.
+    ``.tolist()`` returns genuine Python floats, which every backend accepts.
+    """
     if not texts:
         return []
     from ..embedding import get_embedding_function
 
     ef = get_embedding_function()
     vectors = ef(input=texts)
-    return [list(v) for v in vectors]
+    return [v.tolist() if hasattr(v, "tolist") else [float(x) for x in v] for v in vectors]
 
 
 def _as_list(value):

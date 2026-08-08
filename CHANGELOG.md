@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Bug Fixes
+
+- **Chroma ingest no longer fails on NumPy 2.x.** Every write to the default backend raised `ValueError: Expected embeddings to be a list of floats or ints...`. Two independently-correct changes combined: `ChromaBackend` began declaring `requires_explicit_embeddings`, routing the default backend through `EmbeddingCollection` for the first time, and that wrapper's `_embed_texts` converted rows with `list(row)`. Iterating a NumPy row yields `np.float32` *scalars*, and under NumPy 2.x those are no longer `float` subclasses, so ChromaDB's `normalize_embeddings` type gate (`isinstance(row[0], (int, float))`) rejected the batch outright. Rows now convert with `.tolist()`, which returns genuine Python floats. The regression tests live in `tests/test_embedding.py` because `conftest` stubs `_embed_texts` out for every other module — which is why CI stayed green while ingest was broken in the field. (#2190)
+
 ---
 
 ## [3.7.0] — 2026-08-02

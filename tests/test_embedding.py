@@ -192,3 +192,48 @@ def test_describe_device_uses_resolved_effective_device(monkeypatch):
     )
 
     assert embedding.describe_device("auto") == "cuda"
+
+
+def test_embed_texts_returns_python_floats_so_chroma_accepts(monkeypatch):
+    """``_embed_texts`` must hand back genuine Python floats.
+
+    Iterating a NumPy row yields ``np.float32`` scalars, and under NumPy 2.x
+    those are not ``float`` subclasses. ChromaDB's ``normalize_embeddings``
+    gates on ``isinstance(row[0], (int, float))``, so converting rows with
+    ``list(row)`` makes every upsert raise ``ValueError`` on the default
+    Chroma backend once it declares ``requires_explicit_embeddings``.
+
+    This lives in ``test_embedding`` because ``conftest`` stubs out
+    ``_embed_texts`` for every other module, which is why the regression
+    reached production unnoticed.
+    """
+    import numpy as np
+    from chromadb.api.types import normalize_embeddings
+
+    from mempalace.backends.embedding_wrapper import _embed_texts
+
+    class NumpyEF:
+        def __call__(self, input):
+            return np.asarray([[0.1, 0.2, 0.3]] * len(input), dtype=np.float32)
+
+    monkeypatch.setattr(embedding, "get_embedding_function", lambda: NumpyEF())
+
+    vectors = _embed_texts(["alpha", "beta"])
+
+    assert [type(x) for x in vectors[0]] == [float, float, float]
+    assert not any(isinstance(x, np.floating) for x in vectors[0])
+    normalize_embeddings(vectors)
+
+
+def test_embed_texts_handles_plain_list_embedders(monkeypatch):
+    """Embedders already returning plain lists must pass through unchanged."""
+    from mempalace.backends.embedding_wrapper import _embed_texts
+
+    class ListEF:
+        def __call__(self, input):
+            return [[0.5, 0.25] for _ in input]
+
+    monkeypatch.setattr(embedding, "get_embedding_function", lambda: ListEF())
+
+    assert _embed_texts(["a", "b"]) == [[0.5, 0.25], [0.5, 0.25]]
+    assert _embed_texts([]) == []
